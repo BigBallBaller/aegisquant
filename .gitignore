@@ -1,0 +1,22 @@
+# ===== Python =====
+**/.venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# ===== Node / Next.js =====
+**/node_modules/
+**/.next/
+**/out/
+**/.turbo/
+*.log
+
+# ===== OS =====
+.DS_Store
+
+# ===== Data artifacts (keep local by default) =====
+data/raw/
+data/processed/
