@@ -22,13 +22,32 @@ type RegimePoint = {
   risk_off_prob: number
 }
 
+type FeaturePoint = {
+  date: string
+  close: number
+  drawdown: number
+  vol_20?: number
+  mom_60?: number
+}
+
 function fmtProb(x: number) {
   if (!Number.isFinite(x)) return "–"
   return x.toFixed(3)
 }
 
+function fmtNum(x: number) {
+  if (!Number.isFinite(x)) return "–"
+  return x.toFixed(2)
+}
+
+function fmtPct(x: number) {
+  if (!Number.isFinite(x)) return "–"
+  return `${(x * 100).toFixed(2)}%`
+}
+
 export default function ResearchPage() {
-  const [data, setData] = useState<RegimePoint[]>([])
+  const [regime, setRegime] = useState<RegimePoint[]>([])
+  const [feats, setFeats] = useState<FeaturePoint[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -44,17 +63,24 @@ export default function ResearchPage() {
         setLoading(true)
         setError(null)
 
-        const res = await fetch(
-          `http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`,
-          { cache: "no-store" }
-        )
+        const [rRes, fRes] = await Promise.all([
+          fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
+          fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
+        ])
 
-        if (!res.ok) throw new Error(`Failed to fetch regime series (${res.status})`)
+        if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
+        if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
 
-        const json = await res.json()
-        const rows = Array.isArray(json?.data) ? (json.data as RegimePoint[]) : []
+        const rJson = await rRes.json()
+        const fJson = await fRes.json()
 
-        if (alive) setData(rows)
+        const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
+        const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
+
+        if (alive) {
+          setRegime(rRows)
+          setFeats(fRows)
+        }
       } catch (e: any) {
         if (alive) setError(e?.message ?? "Unknown error")
       } finally {
@@ -68,8 +94,9 @@ export default function ResearchPage() {
     }
   }, [limit])
 
-  const hasData = useMemo(() => data.length > 0, [data])
-  const latest = useMemo(() => (data.length ? data[data.length - 1] : null), [data])
+  const hasRegime = useMemo(() => regime.length > 0, [regime])
+  const hasFeats = useMemo(() => feats.length > 0, [feats])
+  const latest = useMemo(() => (regime.length ? regime[regime.length - 1] : null), [regime])
 
   const stress = 0.7
 
@@ -77,105 +104,139 @@ export default function ResearchPage() {
     <PageShell
       title="Research"
       badge={<Badge variant="secondary">Baseline Regime</Badge>}
-      subtitle="Visualize regime probabilities generated from real features. Baseline model: rolling volatility z-score mapped through a sigmoid → risk-off probability."
+      subtitle="Regime probabilities + market context on real SPY data. Baseline model: rolling volatility z-score mapped through a sigmoid → risk-off probability."
     >
-      <Card>
-        <CardHeader className="space-y-3">
-          <div className="flex items-center justify-between gap-4 flex-wrap">
-            <CardTitle className="text-base">Risk-off probability</CardTitle>
+      {/* Controls */}
+      <div className="flex items-center gap-4 flex-wrap text-sm">
+        <label className="flex items-center gap-2">
+          <span className="text-muted-foreground">Lookback</span>
+          <select
+            className="h-9 rounded-md border bg-background px-3"
+            value={limit}
+            onChange={(e) => setLimit(Number(e.target.value))}
+          >
+            <option value={500}>500</option>
+            <option value={1500}>1500</option>
+            <option value={3000}>3000</option>
+            <option value={5000}>5000</option>
+          </select>
+        </label>
 
-            <div className="flex items-center gap-2 flex-wrap">
-              <Badge variant="secondary">
-                Current risk-off: {latest ? fmtProb(latest.risk_off_prob) : "–"}
-              </Badge>
-              <Badge variant="outline">Stress threshold: {stress.toFixed(2)}</Badge>
-            </div>
-          </div>
+        <label className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            checked={showZ}
+            onChange={(e) => setShowZ(e.target.checked)}
+          />
+          <span className="text-muted-foreground">Show z_vol overlay</span>
+        </label>
 
-          {/* Controls */}
-          <div className="flex items-center gap-4 flex-wrap text-sm">
-            <label className="flex items-center gap-2">
-              <span className="text-muted-foreground">Lookback</span>
-              <select
-                className="h-9 rounded-md border bg-background px-3"
-                value={limit}
-                onChange={(e) => setLimit(Number(e.target.value))}
-              >
-                <option value={500}>500</option>
-                <option value={1500}>1500</option>
-                <option value={3000}>3000</option>
-                <option value={5000}>5000</option>
-              </select>
-            </label>
+        <div className="flex items-center gap-2 flex-wrap ml-auto">
+          <Badge variant="secondary">
+            Current risk-off: {latest ? fmtProb(latest.risk_off_prob) : "–"}
+          </Badge>
+          <Badge variant="outline">Stress threshold: {stress.toFixed(2)}</Badge>
+        </div>
+      </div>
 
-            <label className="flex items-center gap-2">
-              <input
-                type="checkbox"
-                className="h-4 w-4"
-                checked={showZ}
-                onChange={(e) => setShowZ(e.target.checked)}
-              />
-              <span className="text-muted-foreground">Show z_vol overlay</span>
-            </label>
-          </div>
-        </CardHeader>
+      {loading ? (
+        <div className="text-sm text-muted-foreground">Loading series…</div>
+      ) : error ? (
+        <div className="text-sm text-red-600">{error}</div>
+      ) : !hasRegime || !hasFeats ? (
+        <div className="text-sm text-muted-foreground">No data returned.</div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6">
+          {/* Regime chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Risk-off probability</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[360px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={regime}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickMargin={8} minTickGap={24} />
+                    <YAxis yAxisId="p" domain={[0, 1]} tickMargin={8} />
+                    {showZ ? <YAxis yAxisId="z" orientation="right" tickMargin={8} /> : null}
 
-        <CardContent>
-          {loading ? (
-            <div className="text-sm text-muted-foreground">Loading regime series…</div>
-          ) : error ? (
-            <div className="text-sm text-red-600">{error}</div>
-          ) : !hasData ? (
-            <div className="text-sm text-muted-foreground">No data returned.</div>
-          ) : (
-            <div className="h-[380px] w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={data}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="date" tickMargin={8} minTickGap={24} />
+                    <ReferenceLine yAxisId="p" y={stress} strokeDasharray="6 6" />
 
-                  {/* Left axis for probability */}
-                  <YAxis yAxisId="p" domain={[0, 1]} tickMargin={8} />
-
-                  {/* Right axis for z_vol (only if showing) */}
-                  {showZ ? <YAxis yAxisId="z" orientation="right" tickMargin={8} /> : null}
-
-                  <ReferenceLine yAxisId="p" y={stress} strokeDasharray="6 6" />
-
-                  <Tooltip
-                    labelFormatter={(label) => `Date: ${label}`}
-                    formatter={(value, name) => {
-                      if (name === "risk_off_prob")
-                        return [fmtProb(Number(value)), "risk_off_prob"]
-                      if (name === "z_vol")
-                        return [Number(value).toFixed(3), "z_vol"]
-                      return [String(value), String(name)]
-                    }}
-                  />
-
-                  <Line
-                    yAxisId="p"
-                    type="monotone"
-                    dataKey="risk_off_prob"
-                    dot={false}
-                    strokeWidth={2}
-                  />
-
-                  {showZ ? (
-                    <Line
-                      yAxisId="z"
-                      type="monotone"
-                      dataKey="z_vol"
-                      dot={false}
-                      strokeWidth={2}
+                    <Tooltip
+                      labelFormatter={(label) => `Date: ${label}`}
+                      formatter={(value, name) => {
+                        if (name === "risk_off_prob") return [fmtProb(Number(value)), "risk_off_prob"]
+                        if (name === "z_vol") return [Number(value).toFixed(3), "z_vol"]
+                        return [String(value), String(name)]
+                      }}
                     />
-                  ) : null}
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+
+                    <Line yAxisId="p" type="monotone" dataKey="risk_off_prob" dot={false} strokeWidth={2} />
+                    {showZ ? (
+                      <Line yAxisId="z" type="monotone" dataKey="z_vol" dot={false} strokeWidth={2} />
+                    ) : null}
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Price chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">SPY close price</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[300px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={feats}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickMargin={8} minTickGap={24} />
+                    <YAxis tickMargin={8} />
+                    <Tooltip
+                      labelFormatter={(label) => `Date: ${label}`}
+                      formatter={(value, name) => {
+                        if (name === "close") return [fmtNum(Number(value)), "close"]
+                        return [String(value), String(name)]
+                      }}
+                    />
+                    <Line type="monotone" dataKey="close" dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Drawdown chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Drawdown</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="h-[260px] w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={feats}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" tickMargin={8} minTickGap={24} />
+                    <YAxis tickMargin={8} />
+                    <Tooltip
+                      labelFormatter={(label) => `Date: ${label}`}
+                      formatter={(value, name) => {
+                        if (name === "drawdown") return [fmtPct(Number(value)), "drawdown"]
+                        return [String(value), String(name)]
+                      }}
+                    />
+                    <ReferenceLine y={0} strokeDasharray="6 6" />
+                    <Line type="monotone" dataKey="drawdown" dot={false} strokeWidth={2} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </PageShell>
   )
 }

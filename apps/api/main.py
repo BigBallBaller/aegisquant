@@ -177,3 +177,21 @@ def regime_series(symbol: str = "SPY", model: str = "baseline", limit: int = 150
         return {"symbol": symbol.upper(), "model": model, "rows": len(out), "data": out}
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/features/series")
+def features_series(symbol: str = "SPY", limit: int = 1500):
+    try:
+        df = read_latest_features(symbol).copy()
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.sort_values("date")
+
+        limit = max(1, min(int(limit), 5000))
+        df = df.tail(limit)
+
+        keep = ["date", "close", "drawdown", "vol_20", "mom_60"]
+        keep = [c for c in keep if c in df.columns]
+        out = df[keep].assign(date=df["date"].dt.strftime("%Y-%m-%d")).to_dict(orient="records")
+
+        return {"symbol": symbol.upper(), "rows": len(out), "data": out}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
