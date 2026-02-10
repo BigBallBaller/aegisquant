@@ -49,6 +49,8 @@ function fmtPct(x: number) {
 export default function ResearchPage() {
   const [regime, setRegime] = useState<RegimePoint[]>([])
   const [feats, setFeats] = useState<FeaturePoint[]>([])
+  const [stats, setStats] = useState<any | null>(null)
+
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -63,22 +65,26 @@ export default function ResearchPage() {
   const [running, setRunning] = useState<boolean>(false)
 
   async function fetchSeries() {
-    const [rRes, fRes] = await Promise.all([
+    const [rRes, fRes, sRes] = await Promise.all([
       fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
       fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
+      fetch(`http://localhost:8000/regime/stats?symbol=SPY&threshold=${stress}`, { cache: "no-store" }),
     ])
 
     if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
     if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
+    if (!sRes.ok) throw new Error(`Failed to fetch regime stats (${sRes.status})`)
 
     const rJson = await rRes.json()
     const fJson = await fRes.json()
+    const sJson = await sRes.json()
 
     const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
     const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
 
     setRegime(rRows)
     setFeats(fRows)
+    setStats(sJson)
   }
 
   useEffect(() => {
@@ -88,6 +94,8 @@ export default function ResearchPage() {
       try {
         setLoading(true)
         setError(null)
+        setStats(null)
+
         if (!alive) return
         await fetchSeries()
       } catch (e: any) {
@@ -101,7 +109,7 @@ export default function ResearchPage() {
     return () => {
       alive = false
     }
-  }, [limit])
+  }, [limit, stress])
 
   const hasRegime = useMemo(() => regime.length > 0, [regime])
   const hasFeats = useMemo(() => feats.length > 0, [feats])
@@ -213,6 +221,50 @@ export default function ResearchPage() {
           </div>
 
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+        </CardContent>
+      </Card>
+
+      {/* Regime Stats Table */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Regime-conditioned stats (next-day returns)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!stats ? (
+            <div className="text-sm text-muted-foreground">Loading stats…</div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b">
+                    <th className="py-2 text-left">Bucket</th>
+                    <th className="py-2 text-right">Coverage</th>
+                    <th className="py-2 text-right">Ann Return</th>
+                    <th className="py-2 text-right">Ann Vol</th>
+                    <th className="py-2 text-right">Sharpe</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {["risk_on", "risk_off"].map((k) => {
+                    const row = stats[k]
+                    const pct = (x: number | null) => (x == null ? "–" : `${(x * 100).toFixed(2)}%`)
+                    const shp = (x: number | null) => (x == null ? "–" : x.toFixed(2))
+                    return (
+                      <tr key={k} className="border-b">
+                        <td className="py-2">
+                          {k === "risk_on" ? "Risk-on" : `Risk-off (≥ ${stats.threshold})`}
+                        </td>
+                        <td className="py-2 text-right">{pct(row.coverage)}</td>
+                        <td className="py-2 text-right">{pct(row.ann_return)}</td>
+                        <td className="py-2 text-right">{pct(row.ann_vol)}</td>
+                        <td className="py-2 text-right">{shp(row.sharpe)}</td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
         </CardContent>
       </Card>
 

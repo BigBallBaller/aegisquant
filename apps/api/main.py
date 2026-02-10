@@ -1,6 +1,7 @@
 from regime import build_baseline_regime, save_regime, latest_regime_file, read_latest_regime
 from features import read_latest_features
 import pandas as pd
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -196,5 +197,90 @@ def features_series(symbol: str = "SPY", limit: int = 1500):
         out = df[keep].assign(date=df["date"].dt.strftime("%Y-%m-%d")).to_dict(orient="records")
 
         return {"symbol": symbol.upper(), "rows": len(out), "data": out}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/regime/stats")
+def regime_stats(symbol: str = "SPY", threshold: float = 0.7, model: str = "baseline"):
+    """
+    Regime-conditioned performance stats using next-day returns:
+    Signal at day t (risk_off_prob) -> evaluates return at day t+1.
+    """
+    try:
+        # Load features (must exist already)
+        feats = read_latest_features(symbol).copy()
+        feats["date"] = pd.to_datetime(feats["date"]).dt.tz_localize(None)
+        feats = feats.sort_values("date")
+
+        # Load latest regime file directly from data/processed
+        data_dir = Path(__file__).resolve().parents[2] / "data"
+        proc_dir = data_dir / "processed"
+        files = sorted(proc_dir.glob(f"{symbol.upper()}_regime_{model}_*.parquet"))
+        if not files:
+            raise FileNotFoundError(f"No cached regime parquet found for {symbol} model={model}. Run /regime/run first.")
+        reg = pd.read_parquet(files[-1]).copy()
+        reg["date"] = pd.to_datetime(reg["date"]).dt.tz_localize(None)
+        reg = reg.sort_values("date")
+
+        # Merge on date
+        df = feats.merge(reg[["date", "risk_off_prob"]], on="date", how="inner")
+
+        if "log_ret" not in df.columns:
+            raise ValueError("features missing log_ret column. Re-run /data/process.")
+
+        # Evaluate next-day returns (no peeking)
+        df["fwd_log_ret_1d"] = df["log_ret"].shift(-1)
+        df = df.dropna(subset=["fwd_log_ret_1d"])
+
+        thr = float(threshold)
+        df["risk_off"] = df["risk_off_prob"] >= thr
+
+        def summarize(mask: pd.Series):
+            s = df.loc[mask, "fwd_log_ret_1d"]
+            n = int(s.shape[0])
+            if n < 5:
+                return {
+                    "n": n,
+                    "coverage": float(n) / float(len(df)) if len(df) else 0.0,
+                    "mean_daily": None,
+                    "ann_return": None,
+                    "ann_vol": None,
+                    "sharpe": None,
+                }
+            mean_d = float(s.mean())
+            vol_d = float(s.std(ddof=1))
+            ann_return = mean_d * 252.0
+            ann_vol = vol_d * (252.0 ** 0.5)
+            sharpe = (ann_return / ann_vol) if ann_vol > 0 else None
+
+            return {
+                "n": n,
+                "coverage": float(n) / float(len(df)),
+                "mean_daily": mean_d,
+                "ann_return": ann_return,
+                "ann_vol": ann_vol,
+                "sharpe": sharpe,
+            }
+
+        risk_off_stats = summarize(df["risk_off"])
+        risk_on_stats = summarize(~df["risk_off"])
+
+        # Simple delta (risk_on minus risk_off)
+        delta = {}
+        for k in ["mean_daily", "ann_return", "ann_vol", "sharpe"]:
+            a = risk_on_stats.get(k)
+            b = risk_off_stats.get(k)
+            delta[k] = (a - b) if (a is not None and b is not None) else None
+
+        return {
+            "symbol": symbol.upper(),
+            "model": model,
+            "threshold": thr,
+            "rows_used": int(len(df)),
+            "risk_on": risk_on_stats,
+            "risk_off": risk_off_stats,
+            "delta_risk_on_minus_off": delta,
+        }
+
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
