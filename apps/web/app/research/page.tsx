@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { PageShell } from "@/components/page-shell"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 
 import {
   LineChart,
@@ -55,6 +56,31 @@ export default function ResearchPage() {
   const [limit, setLimit] = useState<number>(1500)
   const [showZ, setShowZ] = useState<boolean>(false)
 
+  // experiment params
+  const [zWindow, setZWindow] = useState<number>(252)
+  const [k, setK] = useState<number>(1.25)
+  const [stress, setStress] = useState<number>(0.7)
+  const [running, setRunning] = useState<boolean>(false)
+
+  async function fetchSeries() {
+    const [rRes, fRes] = await Promise.all([
+      fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
+      fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
+    ])
+
+    if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
+    if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
+
+    const rJson = await rRes.json()
+    const fJson = await fRes.json()
+
+    const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
+    const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
+
+    setRegime(rRows)
+    setFeats(fRows)
+  }
+
   useEffect(() => {
     let alive = true
 
@@ -62,25 +88,8 @@ export default function ResearchPage() {
       try {
         setLoading(true)
         setError(null)
-
-        const [rRes, fRes] = await Promise.all([
-          fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
-          fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
-        ])
-
-        if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
-        if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
-
-        const rJson = await rRes.json()
-        const fJson = await fRes.json()
-
-        const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
-        const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
-
-        if (alive) {
-          setRegime(rRows)
-          setFeats(fRows)
-        }
+        if (!alive) return
+        await fetchSeries()
       } catch (e: any) {
         if (alive) setError(e?.message ?? "Unknown error")
       } finally {
@@ -98,57 +107,121 @@ export default function ResearchPage() {
   const hasFeats = useMemo(() => feats.length > 0, [feats])
   const latest = useMemo(() => (regime.length ? regime[regime.length - 1] : null), [regime])
 
-  const stress = 0.7
+  async function runBaseline() {
+    try {
+      setRunning(true)
+      setError(null)
+
+      const url = `http://localhost:8000/regime/run?symbol=SPY&z_window=${zWindow}&k=${k}`
+      const res = await fetch(url, { method: "POST" })
+      if (!res.ok) {
+        const j = await res.json().catch(() => null)
+        throw new Error(j?.detail ?? `Run failed (${res.status})`)
+      }
+
+      await fetchSeries()
+    } catch (e: any) {
+      setError(e?.message ?? "Unknown error")
+    } finally {
+      setRunning(false)
+    }
+  }
 
   return (
     <PageShell
       title="Research"
       badge={<Badge variant="secondary">Baseline Regime</Badge>}
-      subtitle="Regime probabilities + market context on real SPY data. Baseline model: rolling volatility z-score mapped through a sigmoid → risk-off probability."
+      subtitle="Run baseline regime experiments and visualize regime probabilities alongside price and drawdown."
     >
-      {/* Controls */}
-      <div className="flex items-center gap-4 flex-wrap text-sm">
-        <label className="flex items-center gap-2">
-          <span className="text-muted-foreground">Lookback</span>
-          <select
-            className="h-9 rounded-md border bg-background px-3"
-            value={limit}
-            onChange={(e) => setLimit(Number(e.target.value))}
-          >
-            <option value={500}>500</option>
-            <option value={1500}>1500</option>
-            <option value={3000}>3000</option>
-            <option value={5000}>5000</option>
-          </select>
-        </label>
+      {/* Experiment Panel */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Experiment controls</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-wrap items-end gap-4 text-sm">
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">Lookback</span>
+              <select
+                className="h-9 rounded-md border bg-background px-3"
+                value={limit}
+                onChange={(e) => setLimit(Number(e.target.value))}
+              >
+                <option value={500}>500</option>
+                <option value={1500}>1500</option>
+                <option value={3000}>3000</option>
+                <option value={5000}>5000</option>
+              </select>
+            </label>
 
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            className="h-4 w-4"
-            checked={showZ}
-            onChange={(e) => setShowZ(e.target.checked)}
-          />
-          <span className="text-muted-foreground">Show z_vol overlay</span>
-        </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">z_window</span>
+              <input
+                className="h-9 w-28 rounded-md border bg-background px-3"
+                type="number"
+                min={20}
+                max={1000}
+                value={zWindow}
+                onChange={(e) => setZWindow(Number(e.target.value))}
+              />
+            </label>
 
-        <div className="flex items-center gap-2 flex-wrap ml-auto">
-          <Badge variant="secondary">
-            Current risk-off: {latest ? fmtProb(latest.risk_off_prob) : "–"}
-          </Badge>
-          <Badge variant="outline">Stress threshold: {stress.toFixed(2)}</Badge>
-        </div>
-      </div>
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">k</span>
+              <input
+                className="h-9 w-28 rounded-md border bg-background px-3"
+                type="number"
+                step="0.05"
+                min={0.1}
+                max={10}
+                value={k}
+                onChange={(e) => setK(Number(e.target.value))}
+              />
+            </label>
+
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">stress threshold</span>
+              <input
+                className="h-9 w-28 rounded-md border bg-background px-3"
+                type="number"
+                step="0.05"
+                min={0}
+                max={1}
+                value={stress}
+                onChange={(e) => setStress(Number(e.target.value))}
+              />
+            </label>
+
+            <label className="flex items-center gap-2 pb-1.5">
+              <input
+                type="checkbox"
+                className="h-4 w-4"
+                checked={showZ}
+                onChange={(e) => setShowZ(e.target.checked)}
+              />
+              <span className="text-muted-foreground">Show z_vol overlay</span>
+            </label>
+
+            <div className="ml-auto flex items-center gap-2 flex-wrap">
+              <Badge variant="secondary">
+                Current risk-off: {latest ? fmtProb(latest.risk_off_prob) : "–"}
+              </Badge>
+              <Button onClick={runBaseline} disabled={running}>
+                {running ? "Running…" : "Run baseline"}
+              </Button>
+            </div>
+          </div>
+
+          {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
+        </CardContent>
+      </Card>
 
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading series…</div>
-      ) : error ? (
-        <div className="text-sm text-red-600">{error}</div>
       ) : !hasRegime || !hasFeats ? (
         <div className="text-sm text-muted-foreground">No data returned.</div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
-          {/* Regime chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Risk-off probability</CardTitle>
@@ -183,7 +256,6 @@ export default function ResearchPage() {
             </CardContent>
           </Card>
 
-          {/* Price chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">SPY close price</CardTitle>
@@ -209,7 +281,6 @@ export default function ResearchPage() {
             </CardContent>
           </Card>
 
-          {/* Drawdown chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Drawdown</CardTitle>
