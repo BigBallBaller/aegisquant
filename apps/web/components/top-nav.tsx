@@ -21,7 +21,7 @@ export function TopNav() {
           <Link href="/" className="text-lg font-semibold tracking-tight">
             AegisQuant
           </Link>
-          <Badge variant="secondary">Local</Badge>
+          <Badge variant="secondary">Volatility Research Lab</Badge>
         </div>
 
         <nav className="flex items-center gap-4 text-sm">
