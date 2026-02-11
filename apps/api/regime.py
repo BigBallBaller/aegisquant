@@ -220,7 +220,6 @@ def regime_equity(
         out = out.tail(limit)
 
         return {
-            "debug": "REGIME_EQUITY_V3",
             "symbol": symbol_u,
             "model": model,
             "threshold": threshold,
