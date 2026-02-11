@@ -14,7 +14,10 @@ from features import latest_features_file, read_latest_features
 
 from data import pull_prices, latest_raw_file, read_latest_prices
 
+from regime import router as regime_router
+
 app = FastAPI(title="AegisQuant API")
+app.include_router(regime_router)
 
 app.add_middleware(
     CORSMiddleware,
@@ -284,3 +287,4 @@ def regime_stats(symbol: str = "SPY", threshold: float = 0.7, model: str = "base
 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+

@@ -15,6 +15,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
   ReferenceLine,
+  ReferenceArea,
 } from "recharts"
 
 type RegimePoint = {
@@ -31,25 +32,92 @@ type FeaturePoint = {
   mom_60?: number
 }
 
+type EquityPoint = {
+  date: string
+  bh: number
+  regime_gross: number
+  regime_net: number
+  pos: number
+  trade: number
+}
+
+type EquitySummary = {
+  n: number | null
+  cagr: number | null
+  ann_return: number | null
+  ann_vol: number | null
+  sharpe: number | null
+  max_drawdown: number | null
+  final_equity: number | null
+}
+
+type EquityPayload = {
+  debug?: string
+  symbol: string
+  model: string
+  threshold: number
+  cost_bps: number
+  start: string
+  end: string
+  rows: number
+  trades: number
+  trades_per_year: number
+  cost_drag_final_equity: number
+  summaries: {
+    buy_hold: EquitySummary
+    regime_gross: EquitySummary
+    regime_net: EquitySummary
+  }
+  data: EquityPoint[]
+}
+
+function computeRiskOffBands(dates: string[], probs: number[], threshold: number) {
+  const bands: { x1: string; x2: string }[] = []
+  let start: string | null = null
+
+  for (let i = 0; i < dates.length; i++) {
+    const isOff = probs[i] >= threshold
+
+    if (isOff && start == null) start = dates[i]
+    if (!isOff && start != null) {
+      bands.push({ x1: start, x2: dates[i] })
+      start = null
+    }
+  }
+
+  if (start != null && dates.length > 0) {
+    bands.push({ x1: start, x2: dates[dates.length - 1] })
+  }
+
+  return bands
+}
+
 function fmtProb(x: number) {
   if (!Number.isFinite(x)) return "–"
   return x.toFixed(3)
 }
-
 function fmtNum(x: number) {
   if (!Number.isFinite(x)) return "–"
   return x.toFixed(2)
 }
-
 function fmtPct(x: number) {
   if (!Number.isFinite(x)) return "–"
   return `${(x * 100).toFixed(2)}%`
+}
+function fmtMaybePct(x: number | null) {
+  if (x == null || !Number.isFinite(x)) return "–"
+  return `${(x * 100).toFixed(2)}%`
+}
+function fmtMaybeNum(x: number | null, d = 2) {
+  if (x == null || !Number.isFinite(x)) return "–"
+  return x.toFixed(d)
 }
 
 export default function ResearchPage() {
   const [regime, setRegime] = useState<RegimePoint[]>([])
   const [feats, setFeats] = useState<FeaturePoint[]>([])
   const [stats, setStats] = useState<any | null>(null)
+  const [equity, setEquity] = useState<EquityPayload | null>(null)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -62,22 +130,40 @@ export default function ResearchPage() {
   const [zWindow, setZWindow] = useState<number>(252)
   const [k, setK] = useState<number>(1.25)
   const [stress, setStress] = useState<number>(0.7)
+  const [costBps, setCostBps] = useState<number>(5)
   const [running, setRunning] = useState<boolean>(false)
 
+  const hasRegime = useMemo(() => regime.length > 0, [regime])
+  const hasFeats = useMemo(() => feats.length > 0, [feats])
+  const latest = useMemo(() => (regime.length ? regime[regime.length - 1] : null), [regime])
+
+  const riskOffBands = useMemo(() => {
+    if (!regime || regime.length === 0) return []
+    const dates = regime.map((d) => d.date)
+    const probs = regime.map((d) => d.risk_off_prob)
+    return computeRiskOffBands(dates, probs, stress)
+  }, [regime, stress])
+
   async function fetchSeries() {
-    const [rRes, fRes, sRes] = await Promise.all([
+    const [rRes, fRes, sRes, eRes] = await Promise.all([
       fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
       fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, { cache: "no-store" }),
       fetch(`http://localhost:8000/regime/stats?symbol=SPY&threshold=${stress}`, { cache: "no-store" }),
+      fetch(
+        `http://localhost:8000/regime/equity?symbol=SPY&threshold=${stress}&cost_bps=${costBps}&limit=${limit}`,
+        { cache: "no-store" }
+      ),
     ])
 
     if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
     if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
     if (!sRes.ok) throw new Error(`Failed to fetch regime stats (${sRes.status})`)
+    if (!eRes.ok) throw new Error(`Failed to fetch regime equity (${eRes.status})`)
 
     const rJson = await rRes.json()
     const fJson = await fRes.json()
     const sJson = await sRes.json()
+    const eJson = await eRes.json()
 
     const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
     const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
@@ -85,6 +171,7 @@ export default function ResearchPage() {
     setRegime(rRows)
     setFeats(fRows)
     setStats(sJson)
+    setEquity(eJson as EquityPayload)
   }
 
   useEffect(() => {
@@ -95,6 +182,7 @@ export default function ResearchPage() {
         setLoading(true)
         setError(null)
         setStats(null)
+        setEquity(null)
 
         if (!alive) return
         await fetchSeries()
@@ -109,11 +197,8 @@ export default function ResearchPage() {
     return () => {
       alive = false
     }
-  }, [limit, stress])
-
-  const hasRegime = useMemo(() => regime.length > 0, [regime])
-  const hasFeats = useMemo(() => feats.length > 0, [feats])
-  const latest = useMemo(() => (regime.length ? regime[regime.length - 1] : null), [regime])
+    // refresh when these change
+  }, [limit, stress, costBps])
 
   async function runBaseline() {
     try {
@@ -139,7 +224,7 @@ export default function ResearchPage() {
     <PageShell
       title="Research"
       badge={<Badge variant="secondary">Baseline Regime</Badge>}
-      subtitle="Run baseline regime experiments and visualize regime probabilities alongside price and drawdown."
+      subtitle="Run baseline regime experiments and visualize regime probabilities alongside price, drawdown, and regime-conditioned equity curves."
     >
       {/* Experiment Panel */}
       <Card>
@@ -200,6 +285,19 @@ export default function ResearchPage() {
               />
             </label>
 
+            <label className="flex flex-col gap-1">
+              <span className="text-muted-foreground">cost (bps)</span>
+              <input
+                className="h-9 w-28 rounded-md border bg-background px-3"
+                type="number"
+                step="1"
+                min={0}
+                max={200}
+                value={costBps}
+                onChange={(e) => setCostBps(Number(e.target.value))}
+              />
+            </label>
+
             <label className="flex items-center gap-2 pb-1.5">
               <input
                 type="checkbox"
@@ -227,7 +325,7 @@ export default function ResearchPage() {
       {/* Regime Stats Table */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Regime-conditioned stats (next-day returns)</CardTitle>
+          <CardTitle className="text-base">Regime-conditioned stats (next-day log returns)</CardTitle>
         </CardHeader>
         <CardContent>
           {!stats ? (
@@ -268,12 +366,68 @@ export default function ResearchPage() {
         </CardContent>
       </Card>
 
+      {/* Equity Summary */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Equity summary (Buy & Hold vs Regime)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!equity ? (
+            <div className="text-sm text-muted-foreground">Loading equity…</div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Badge variant="secondary">
+                  Window: {equity.start} → {equity.end}
+                </Badge>
+                <Badge variant="secondary">Trades: {equity.trades}</Badge>
+                <Badge variant="secondary">Trades/yr: {fmtMaybeNum(equity.trades_per_year, 2)}</Badge>
+                <Badge variant="secondary">Cost (bps): {fmtMaybeNum(equity.cost_bps, 1)}</Badge>
+                <Badge variant="secondary">
+                  Cost drag (final equity): {fmtMaybeNum(equity.cost_drag_final_equity, 3)}
+                </Badge>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="py-2 text-left">Strategy</th>
+                      <th className="py-2 text-right">CAGR</th>
+                      <th className="py-2 text-right">Sharpe</th>
+                      <th className="py-2 text-right">Max DD</th>
+                      <th className="py-2 text-right">Final Equity</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      ["Buy & Hold", equity.summaries.buy_hold],
+                      ["Regime (gross)", equity.summaries.regime_gross],
+                      ["Regime (net)", equity.summaries.regime_net],
+                    ].map(([name, s]) => (
+                      <tr key={name} className="border-b">
+                        <td className="py-2">{name}</td>
+                        <td className="py-2 text-right">{fmtMaybePct(s.cagr)}</td>
+                        <td className="py-2 text-right">{fmtMaybeNum(s.sharpe, 2)}</td>
+                        <td className="py-2 text-right">{fmtMaybePct(s.max_drawdown)}</td>
+                        <td className="py-2 text-right">{fmtMaybeNum(s.final_equity, 3)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {loading ? (
         <div className="text-sm text-muted-foreground">Loading series…</div>
       ) : !hasRegime || !hasFeats ? (
         <div className="text-sm text-muted-foreground">No data returned.</div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
+          {/* Risk-off probability chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Risk-off probability</CardTitle>
@@ -287,6 +441,11 @@ export default function ResearchPage() {
                     <YAxis yAxisId="p" domain={[0, 1]} tickMargin={8} />
                     {showZ ? <YAxis yAxisId="z" orientation="right" tickMargin={8} /> : null}
 
+                    {/* bands for risk-off */}
+                    {riskOffBands.map((b, idx) => (
+                      <ReferenceArea key={idx} x1={b.x1} x2={b.x2} yAxisId="p" />
+                    ))}
+
                     <ReferenceLine yAxisId="p" y={stress} strokeDasharray="6 6" />
 
                     <Tooltip
@@ -299,15 +458,14 @@ export default function ResearchPage() {
                     />
 
                     <Line yAxisId="p" type="monotone" dataKey="risk_off_prob" dot={false} strokeWidth={2} />
-                    {showZ ? (
-                      <Line yAxisId="z" type="monotone" dataKey="z_vol" dot={false} strokeWidth={2} />
-                    ) : null}
+                    {showZ ? <Line yAxisId="z" type="monotone" dataKey="z_vol" dot={false} strokeWidth={2} /> : null}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
             </CardContent>
           </Card>
 
+          {/* Close price chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">SPY close price</CardTitle>
@@ -333,6 +491,7 @@ export default function ResearchPage() {
             </CardContent>
           </Card>
 
+          {/* Drawdown chart */}
           <Card>
             <CardHeader>
               <CardTitle className="text-base">Drawdown</CardTitle>
@@ -356,6 +515,42 @@ export default function ResearchPage() {
                   </LineChart>
                 </ResponsiveContainer>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Equity curves chart */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Equity curves (BH vs Regime gross vs net)</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!equity?.data?.length ? (
+                <div className="text-sm text-muted-foreground">No equity data returned.</div>
+              ) : (
+                <div className="h-[320px] w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={equity.data}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="date" tickMargin={8} minTickGap={24} />
+                      <YAxis tickMargin={8} />
+                      <Tooltip
+                        labelFormatter={(label) => `Date: ${label}`}
+                        formatter={(value, name) => {
+                          if (name === "bh") return [fmtMaybeNum(Number(value), 3), "buy_hold"]
+                          if (name === "regime_gross") return [fmtMaybeNum(Number(value), 3), "regime_gross"]
+                          if (name === "regime_net") return [fmtMaybeNum(Number(value), 3), "regime_net"]
+                          if (name === "pos") return [String(value), "pos"]
+                          if (name === "trade") return [String(value), "trade"]
+                          return [String(value), String(name)]
+                        }}
+                      />
+                      <Line type="monotone" dataKey="bh" dot={false} strokeWidth={2} />
+                      <Line type="monotone" dataKey="regime_gross" dot={false} strokeWidth={2} />
+                      <Line type="monotone" dataKey="regime_net" dot={false} strokeWidth={2} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>
