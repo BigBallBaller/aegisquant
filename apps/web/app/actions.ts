@@ -8,7 +8,9 @@ const yf = new YahooFinance();
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 
-const DATA_DIR = process.env.DATA_DIR || path.join(process.cwd(), "data");
+const DATA_DIR =
+  process.env.DATA_DIR ||
+  (process.env.VERCEL ? path.join("/tmp", "data") : path.join(process.cwd(), "data"));
 const RAW_DIR = path.join(DATA_DIR, "raw");
 const PROCESSED_DIR = path.join(DATA_DIR, "processed");
 
@@ -357,7 +359,6 @@ export async function pullPrices(symbol = "SPY", start = "2010-01-01") {
 }
 
 export async function getDataStatus(symbol = "SPY") {
-  await ensureDirs();
   const sym = symbol.toUpperCase().trim();
   const fp = await latestFile(RAW_DIR, `${sym}_1d_`);
   if (!fp) return { symbol: sym, cached: false };
@@ -402,7 +403,6 @@ export async function processFeatures(symbol = "SPY") {
 }
 
 export async function getFeaturesStatus(symbol = "SPY") {
-  await ensureDirs();
   const sym = symbol.toUpperCase().trim();
   const fp = await latestFile(PROCESSED_DIR, `${sym}_features_`);
   if (!fp) return { symbol: sym, cached: false };
@@ -484,7 +484,6 @@ export async function runRegimeModel(
 }
 
 export async function getRegimeStatus(symbol = "SPY", model = "baseline") {
-  await ensureDirs();
   const sym = symbol.toUpperCase().trim();
   const fp = await latestFile(PROCESSED_DIR, `${sym}_regime_${model}_`);
   if (!fp) return { symbol: sym, model, cached: false };
