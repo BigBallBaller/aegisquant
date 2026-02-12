@@ -432,7 +432,10 @@ export async function getFeaturesPreview(symbol = "SPY", n = 5) {
 
 export async function getFeaturesSeries(symbol = "SPY", limit = 1500) {
   const sym = symbol.toUpperCase().trim();
-  const rows = await readLatestFeatures(sym);
+  const fp = await latestFile(PROCESSED_DIR, `${sym}_features_`);
+  if (!fp) return null;
+
+  const rows = await readJson<FeatureRow[]>(fp);
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
 
   limit = Math.max(1, Math.min(limit, 5000));
@@ -521,7 +524,10 @@ export async function getRegimeSeries(
   model = "baseline"
 ) {
   const sym = symbol.toUpperCase().trim();
-  const rows = await readLatestRegime(sym, model);
+  const fp = await latestFile(PROCESSED_DIR, `${sym}_regime_${model}_`);
+  if (!fp) return null;
+
+  const rows = await readJson<RegimeRow[]>(fp);
   const sorted = [...rows].sort((a, b) => a.date.localeCompare(b.date));
 
   limit = Math.max(50, Math.min(limit, 5000));
@@ -536,8 +542,12 @@ export async function getRegimeStats(
   model = "baseline"
 ) {
   const sym = symbol.toUpperCase().trim();
-  const feats = await readLatestFeatures(sym);
-  const regime = await readLatestRegime(sym, model);
+  const featsFp = await latestFile(PROCESSED_DIR, `${sym}_features_`);
+  const regimeFp = await latestFile(PROCESSED_DIR, `${sym}_regime_${model}_`);
+  if (!featsFp || !regimeFp) return null;
+
+  const feats = await readJson<FeatureRow[]>(featsFp);
+  const regime = await readJson<RegimeRow[]>(regimeFp);
 
   // Build lookup: date -> risk_off_prob
   const regimeMap = new Map(regime.map((r) => [r.date, r.risk_off_prob]));
@@ -631,8 +641,12 @@ export async function getRegimeEquity(
   costBps = Math.max(0, Math.min(200, costBps));
   const cost = costBps / 10000;
 
-  const feats = await readLatestFeatures(sym);
-  const regime = await readLatestRegime(sym, model);
+  const featsFp = await latestFile(PROCESSED_DIR, `${sym}_features_`);
+  const regimeFp = await latestFile(PROCESSED_DIR, `${sym}_regime_${model}_`);
+  if (!featsFp || !regimeFp) return null;
+
+  const feats = await readJson<FeatureRow[]>(featsFp);
+  const regime = await readJson<RegimeRow[]>(regimeFp);
 
   // Merge on date
   const regimeMap = new Map(regime.map((r) => [r.date, r.risk_off_prob]));
@@ -775,4 +789,18 @@ export async function getRegimeEquity(
     summaries,
     data: outData,
   };
+}
+
+// ─── Pipeline: Seed (pull + process + regime in one shot) ───────────────────
+
+export async function seedPipeline(
+  symbol = "SPY",
+  start = "2010-01-01",
+  zWindow = 252,
+  k = 1.25
+) {
+  await pullPrices(symbol, start);
+  await processFeatures(symbol);
+  await runRegimeModel(symbol, zWindow, k);
+  return { ok: true };
 }

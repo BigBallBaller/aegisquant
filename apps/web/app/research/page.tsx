@@ -11,6 +11,7 @@ import {
   getRegimeStats,
   getRegimeEquity,
   runRegimeModel,
+  seedPipeline,
 } from "../actions"
 
 import {
@@ -145,6 +146,8 @@ export default function ResearchPage() {
   const [costBps, setCostBps] = useState<number>(5.0)
 
   const [running, setRunning] = useState<boolean>(false)
+  const [seeding, setSeeding] = useState<boolean>(false)
+  const [needsSeed, setNeedsSeed] = useState<boolean>(false)
 
   const latest = useMemo(
     () => (regime.length ? regime[regime.length - 1] : null),
@@ -166,13 +169,24 @@ export default function ResearchPage() {
       getRegimeEquity("SPY", threshold, costBps, limit),
     ])
 
+    // If any core data is missing, the pipeline hasn't been seeded yet
+    if (!rData || !fData) {
+      setNeedsSeed(true)
+      setRegime([])
+      setFeats([])
+      setStats(null)
+      setEquity(null)
+      return
+    }
+
+    setNeedsSeed(false)
     const rRows = Array.isArray(rData?.data) ? (rData.data as RegimePoint[]) : []
     const fRows = Array.isArray(fData?.data) ? (fData.data as FeaturePoint[]) : []
 
     setRegime(rRows)
     setFeats(fRows)
     setStats(sData)
-    setEquity(eData as EquityResponse)
+    setEquity(eData as EquityResponse | null)
   }
 
   useEffect(() => {
@@ -211,6 +225,21 @@ export default function ResearchPage() {
       setError(e?.message ?? "Unknown error")
     } finally {
       setRunning(false)
+    }
+  }
+
+  async function handleSeed() {
+    try {
+      setSeeding(true)
+      setError(null)
+
+      await seedPipeline("SPY", "2010-01-01", zWindow, k)
+      setNeedsSeed(false)
+      await fetchSeries()
+    } catch (e: any) {
+      setError(e?.message ?? "Unknown error")
+    } finally {
+      setSeeding(false)
     }
   }
 
@@ -331,6 +360,20 @@ export default function ResearchPage() {
           {error ? <div className="mt-3 text-sm text-red-600">{error}</div> : null}
         </CardContent>
       </Card>
+
+      {/* Seed banner when no data exists */}
+      {needsSeed && !loading && (
+        <Card>
+          <CardContent className="py-8 text-center space-y-3">
+            <p className="text-muted-foreground">
+              No cached data found. Pull market data, build features, and run the regime model to get started.
+            </p>
+            <Button onClick={handleSeed} disabled={seeding}>
+              {seeding ? "Seeding pipeline (this may take a moment)…" : "Seed pipeline (SPY from 2010)"}
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Regime Stats Table */}
       <Card>
