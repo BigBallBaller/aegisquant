@@ -316,29 +316,31 @@ export async function pullPrices(symbol = "SPY", start = "2010-01-01") {
   await ensureDirs();
   const sym = symbol.toUpperCase().trim();
 
-  const result = await yf.historical(sym, {
+  const chartResult = await yf.chart(sym, {
     period1: start,
+    period2: new Date(),
     interval: "1d",
   });
 
-  if (!result || result.length === 0) {
+  const quotes = chartResult.quotes;
+  if (!quotes || quotes.length === 0) {
     throw new Error(`No data returned for ${sym} start=${start}`);
   }
 
-  const rows: RawRow[] = result
+  const rows: RawRow[] = quotes
     .map((r) => ({
       date:
         r.date instanceof Date
           ? r.date.toISOString().split("T")[0]
           : String(r.date).split("T")[0],
-      open: r.open,
-      high: r.high,
-      low: r.low,
-      close: r.close,
-      adjClose: r.adjClose ?? r.close,
-      volume: r.volume,
+      open: r.open ?? 0,
+      high: r.high ?? 0,
+      low: r.low ?? 0,
+      close: r.close ?? 0,
+      adjClose: r.adjclose ?? r.close ?? 0,
+      volume: r.volume ?? 0,
     }))
-    .filter((r) => r.close != null && r.date != null)
+    .filter((r) => r.close !== 0 && r.date != null)
     .sort((a, b) => a.date.localeCompare(b.date));
 
   const stamp = utcStamp();
