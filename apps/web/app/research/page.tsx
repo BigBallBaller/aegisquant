@@ -5,6 +5,13 @@ import { PageShell } from "@/components/page-shell"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  getRegimeSeries,
+  getFeaturesSeries,
+  getRegimeStats,
+  getRegimeEquity,
+  runRegimeModel,
+} from "../actions"
 
 import {
   LineChart,
@@ -152,40 +159,20 @@ export default function ResearchPage() {
   }, [regime, stress])
 
   async function fetchSeries() {
-    const [rRes, fRes, sRes, eRes] = await Promise.all([
-      fetch(`http://localhost:8000/regime/series?symbol=SPY&limit=${limit}`, {
-        cache: "no-store",
-      }),
-      fetch(`http://localhost:8000/features/series?symbol=SPY&limit=${limit}`, {
-        cache: "no-store",
-      }),
-      fetch(
-        `http://localhost:8000/regime/stats?symbol=SPY&threshold=${stress}`,
-        { cache: "no-store" }
-      ),
-      fetch(
-        `http://localhost:8000/regime/equity?symbol=SPY&threshold=${threshold}&cost_bps=${costBps}&limit=${limit}`,
-        { cache: "no-store" }
-      ),
+    const [rData, fData, sData, eData] = await Promise.all([
+      getRegimeSeries("SPY", limit),
+      getFeaturesSeries("SPY", limit),
+      getRegimeStats("SPY", stress),
+      getRegimeEquity("SPY", threshold, costBps, limit),
     ])
 
-    if (!rRes.ok) throw new Error(`Failed to fetch regime series (${rRes.status})`)
-    if (!fRes.ok) throw new Error(`Failed to fetch features series (${fRes.status})`)
-    if (!sRes.ok) throw new Error(`Failed to fetch regime stats (${sRes.status})`)
-    if (!eRes.ok) throw new Error(`Failed to fetch equity series (${eRes.status})`)
-
-    const rJson = await rRes.json()
-    const fJson = await fRes.json()
-    const sJson = await sRes.json()
-    const eJson = await eRes.json()
-
-    const rRows = Array.isArray(rJson?.data) ? (rJson.data as RegimePoint[]) : []
-    const fRows = Array.isArray(fJson?.data) ? (fJson.data as FeaturePoint[]) : []
+    const rRows = Array.isArray(rData?.data) ? (rData.data as RegimePoint[]) : []
+    const fRows = Array.isArray(fData?.data) ? (fData.data as FeaturePoint[]) : []
 
     setRegime(rRows)
     setFeats(fRows)
-    setStats(sJson)
-    setEquity(eJson as EquityResponse)
+    setStats(sData)
+    setEquity(eData as EquityResponse)
   }
 
   useEffect(() => {
@@ -218,14 +205,7 @@ export default function ResearchPage() {
       setRunning(true)
       setError(null)
 
-      const url = `http://localhost:8000/regime/run?symbol=SPY&z_window=${zWindow}&k=${k}`
-      const res = await fetch(url, { method: "POST" })
-
-      if (!res.ok) {
-        const j = await res.json().catch(() => null)
-        throw new Error(j?.detail ?? `Run failed (${res.status})`)
-      }
-
+      await runRegimeModel("SPY", zWindow, k)
       await fetchSeries()
     } catch (e: any) {
       setError(e?.message ?? "Unknown error")

@@ -1,17 +1,12 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { PageShell } from "@/components/page-shell"
-
-async function getJSON(url: string) {
-  const res = await fetch(url, { cache: "no-store" })
-  if (!res.ok) throw new Error(`Failed: ${url}`)
-  return res.json()
-}
+import { getDataStatus, getDataQuality, getFeaturesStatus } from "../actions"
 
 export default async function DataPage() {
-  const status = await getJSON("http://localhost:8000/data/status?symbol=SPY")
-  const quality = await getJSON("http://localhost:8000/data/quality?symbol=SPY")
-  const features = await getJSON("http://localhost:8000/data/features/status?symbol=SPY")
+  const status = await getDataStatus("SPY")
+  const quality = status.cached ? await getDataQuality("SPY") : null
+  const features = await getFeaturesStatus("SPY")
 
   return (
     <PageShell
@@ -41,23 +36,25 @@ export default async function DataPage() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Quality Report</CardTitle>
-        </CardHeader>
-        <CardContent className="text-sm text-muted-foreground space-y-2">
-          <div>
-            Duplicate dates: <span className="text-foreground">{quality.duplicate_dates}</span>
-          </div>
-          <div>
-            Missing business days:{" "}
-            <span className="text-foreground">{quality.missing_business_days_count}</span>
-          </div>
-          <div className="text-xs">
-            Note: “missing business days” are expected market holidays/closures, not missing data.
-          </div>
-        </CardContent>
-      </Card>
+      {quality && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Quality Report</CardTitle>
+          </CardHeader>
+          <CardContent className="text-sm text-muted-foreground space-y-2">
+            <div>
+              Duplicate dates: <span className="text-foreground">{quality.duplicate_dates ?? 0}</span>
+            </div>
+            <div>
+              Missing business days:{" "}
+              <span className="text-foreground">{quality.missing_business_days_count ?? 0}</span>
+            </div>
+            <div className="text-xs">
+              Note: "missing business days" are expected market holidays/closures, not missing data.
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -67,7 +64,7 @@ export default async function DataPage() {
           <div>
             Cached: <span className="text-foreground">{String(features.cached)}</span>
           </div>
-          {features.cached && (
+          {features.cached && "columns" in features && (
             <>
               <div>
                 Rows: <span className="text-foreground">{features.rows}</span>
@@ -77,7 +74,7 @@ export default async function DataPage() {
                 <span className="text-foreground">{features.end}</span>
               </div>
               <div>
-                Columns: <span className="text-foreground">{features.columns.join(", ")}</span>
+                Columns: <span className="text-foreground">{(features as { columns: string[] }).columns.join(", ")}</span>
               </div>
             </>
           )}

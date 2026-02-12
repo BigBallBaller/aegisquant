@@ -1,14 +1,9 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
-
-async function getSummary() {
-  const res = await fetch("http://localhost:8000/metrics/summary", { cache: "no-store" })
-  if (!res.ok) throw new Error("Failed to fetch summary")
-  return res.json()
-}
+import { getMetricsSummary } from "./actions"
 
 export default async function Page() {
-  const s = await getSummary()
+  const s = await getMetricsSummary()
 
   return (
     <main className="min-h-screen bg-background text-foreground">
